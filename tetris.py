@@ -39,8 +39,8 @@ DROP_TABLE = [1.0, 0.8, 0.7, 0.6, 0.5, 0.43, 0.36, 0.29, 0.22, 0.17,
               0.13, 0.10, 0.08, 0.06, 0.05]
 
 # Скорость мягкого падения при зажатой стрелке вниз (секунда на клетку).
-# Больше значение — медленнее падение. Раньше было min(скорость_уровня, 0.03),
-# из-за чего фигура летела вниз почти мгновенно.
+# Больше значение — медленнее падение. Одинакова для всех фигур и на всех
+# уровнях (не зависит от скорости гравитации).
 SOFT_DROP_INTERVAL = 0.08
 
 # Задержка фиксации фигуры, когда она стоит на опоре (секунды)
@@ -178,18 +178,27 @@ class Tetris:
         return all(not self.cell_occupied(x, y) for x, y in cells)
 
     # ---------- движения ----------
-    def try_move(self, dx, dy):
+    def try_move(self, dx, dy, from_input=True):
         cells = self.current.cells(dx=dx, dy=dy)
         if self.is_valid(cells):
             self.current.x += dx
             self.current.y += dy
-            self.lock_delay = 0.0
+            # Сбрасываем таймер фиксации только при движении игрока
+            # (horizon/soft drop), но не при автоматическом гравитационном шаге.
+            if dx != 0 and from_input:
+                self.lock_delay = 0.0
             return True
         return False
 
     def try_rotate(self, direction):
         r = self.current.rotated(direction)
         for kx, ky in KICKS:
+            # Поворот не должен двигать фигуру ВНИЗ (ky > 0): иначе при
+            # быстром/непрерывном вращении разные фигуры получают разные
+            # «нырки» вниз по kick-смещениям — выглядит как разная скорость
+            # падения. Разрешены только подъёмы (классические wall kicks).
+            if ky > 0:
+                continue
             cells = self.current.cells(rotation=r, dx=kx, dy=ky)
             if self.is_valid(cells):
                 self.current.rotation = r
@@ -266,12 +275,29 @@ class Tetris:
         self.step(dt)
 
     def step(self, dt):
-        """Один шаг физики: падение, мягкое падение, блокировка."""
-        speed = self.drop_interval()
+        """Один шаг физики: падение, мягкое падение, блокировка.
+
+        Гравитация и soft drop разделены: скорость мягкого падения
+        (SOFT_DROP_INTERVAL) одинакова для всех фигур и не зависит от
+        уровня — это чинит баг «одни фигуры падают на стрелке вниз быстрее
+        других» (раньше использовалось min(скорость_уровня, SOFT_DROP_INTERVAL),
+        и с ростом уровня soft drop незаметно ускорялся до 0.05 с/клетку).
+        """
+        grav = self.drop_interval()
+        if self.soft_drop:
+            # Единая для всех фигур скорость мягкого падения
+            speed = SOFT_DROP_INTERVAL
+        else:
+            speed = grav
+        # Пока зажата стрелка вниз, таймер обычного падения не копит
+        # «остаток», иначе после отпускания клавиши фигура делает лишний
+        # мгновенный шаг вниз.
+        if self.soft_drop:
+            self.drop_timer = min(self.drop_timer, speed)
         self.drop_timer += dt
         while self.drop_timer >= speed:
             self.drop_timer -= speed
-            if not self.try_move(0, 1):
+            if not self.try_move(0, 1, from_input=self.soft_drop):
                 break
         if self.grounded():
             self.lock_delay += dt
@@ -281,11 +307,7 @@ class Tetris:
             self.lock_delay = 0.0
 
     def drop_interval(self):
-        base = DROP_TABLE[min(self.level, len(DROP_TABLE) - 1)]
-        if self.soft_drop:
-            # мягкое падение не быстрее обычного и с собственной скоростью
-            return min(base, SOFT_DROP_INTERVAL)
-        return base
+        return DROP_TABLE[min(self.level, len(DROP_TABLE) - 1)]
 
 
 # ----------------------------- Отрисовка ------------------------------------
