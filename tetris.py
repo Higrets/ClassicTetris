@@ -9,7 +9,7 @@
     Z          — поворот против часовой
     C          — сохранить фигуру в «удержание» (hold)
     P          — пауза
-    R          — рестарт после Game Over
+    R          — рестарт (работает и во время игры, и после Game Over)
     ESC        — выход
 
 Запуск:  python tetris.py
@@ -42,6 +42,14 @@ DROP_TABLE = [1.0, 0.8, 0.7, 0.6, 0.5, 0.43, 0.36, 0.29, 0.22, 0.17,
 # Больше значение — медленнее падение. Раньше было min(скорость_уровня, 0.03),
 # из-за чего фигура летела вниз почти мгновенно.
 SOFT_DROP_INTERVAL = 0.08
+
+# Задержка фиксации фигуры, когда она стоит на опоре (секунды)
+LOCK_DELAY = 0.5
+
+# Максимум поворотов для одной фигуры (как в классическом Тетрисе — 2).
+# После превышения лимита фигура фиксируется по таймеру lock_delay,
+# поэтому бесконечное вращение больше не может "вечить" фигуру в воздухе.
+MAX_ROTATES_PER_PIECE = 15
 
 LINES_PER_LEVEL = 10
 
@@ -138,6 +146,7 @@ class Tetris:
         self.paused = False
         self.drop_timer = 0.0
         self.lock_delay = 0.0
+        self.rotate_count = 0
         self.soft_drop = False
         self.new_piece()
 
@@ -154,6 +163,7 @@ class Tetris:
         self.current = Piece(kind)
         self.drop_timer = 0.0
         self.lock_delay = 0.0
+        self.rotate_count = 0
         self.can_hold = True
         if not self.is_valid(self.current.cells()):
             self.game_over = True
@@ -185,7 +195,12 @@ class Tetris:
                 self.current.rotation = r
                 self.current.x += kx
                 self.current.y += ky
-                self.lock_delay = 0.0
+                # НЕ сбрасываем lock_delay при повороте: иначе бесконечное
+                # вращение "зависает" фигуру над полем и она не падает.
+                # Ограничиваем общее число поворотов одной фигуры (классика).
+                self.rotate_count += 1
+                if self.rotate_count > MAX_ROTATES_PER_PIECE:
+                    self.lock_delay = LOCK_DELAY  # лимит исчерпан — фиксируем по таймеру
                 return True
         return False
 
@@ -260,7 +275,7 @@ class Tetris:
                 break
         if self.grounded():
             self.lock_delay += dt
-            if self.lock_delay >= 0.5:
+            if self.lock_delay >= LOCK_DELAY:
                 self.lock_piece()
         else:
             self.lock_delay = 0.0
@@ -462,7 +477,8 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_r and game.game_over:
+                elif event.key == pygame.K_r:
+                    # R работает всегда: и во время игры, и после Game Over
                     game.reset()
                     ar.reset()
                 elif event.key == pygame.K_p and not game.game_over:
